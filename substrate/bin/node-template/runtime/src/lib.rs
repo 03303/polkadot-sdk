@@ -13,7 +13,7 @@ use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
 	create_runtime_str, generic, impl_opaque_keys,
 	traits::{
-		AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify,
+		self, AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify,
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult, MultiSignature,
@@ -39,6 +39,7 @@ pub use frame_support::{
 	},
 	StorageValue,
 };
+use frame_support::PalletId;
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
@@ -47,8 +48,7 @@ use pallet_transaction_payment::{ConstFeeMultiplier, CurrencyAdapter, Multiplier
 pub use sp_runtime::BuildStorage;
 pub use sp_runtime::{Perbill, Permill};
 
-/// Import the template pallet.
-pub use pallet_template;
+pub use pallet_payment_channels;
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -274,10 +274,31 @@ impl pallet_sudo::Config for Runtime {
 	type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
 }
 
-/// Configure the pallet-template in pallets/template.
-impl pallet_template::Config for Runtime {
+/// Money matters.
+pub mod currency {
+	use super::Balance;
+	pub const MILLICENTS: Balance = 1_000_000_000;
+	pub const UNIT: Balance = 1_000 * MILLICENTS;
+}
+
+parameter_types! {
+	pub const OrganizationDeposit: Balance = currency::UNIT;
+	pub const ServiceDeposit: Balance = 10 * currency::MILLICENTS;
+	pub const PaymentChannelsPalletId: PalletId = PalletId(*b"py/paych");
+}
+
+impl pallet_payment_channels::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
+	type PalletId = PaymentChannelsPalletId;
+	type MaxOrganizationMembers = ConstU32<8>;
+	type MaxNameLength = ConstU32<64>;
+	type MaxMetadataLength = ConstU32<1024>;
+	type Currency = Balances;
+	type OrganizationDeposit = OrganizationDeposit;
+	type ServiceDeposit = ServiceDeposit;
+	type Signature = Signature;
+	type Signer = <Signature as traits::Verify>::Signer;
+	type WeightInfo = ();
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -290,8 +311,7 @@ construct_runtime!(
 		Balances: pallet_balances,
 		TransactionPayment: pallet_transaction_payment,
 		Sudo: pallet_sudo,
-		// Include the custom logic from the pallet-template in the runtime.
-		TemplateModule: pallet_template,
+		PaymentChannels: pallet_payment_channels,
 	}
 );
 
@@ -339,7 +359,6 @@ mod benches {
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
 		[pallet_sudo, Sudo]
-		[pallet_template, TemplateModule]
 	);
 }
 
