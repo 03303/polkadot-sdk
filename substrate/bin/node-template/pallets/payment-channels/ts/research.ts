@@ -112,7 +112,6 @@ const signChannelCounter = (signer, channelId, counter, asHex = true) => {
 }
 
 const bobSig = signChannelCounter(bob, bobChannelId, 77, false);
-const s = api.registry.createType('SpRuntimeMultiSignature::Sr25519', bobSig).toU8a();
 
 // Alice claims 77 (of 100) from Bob's channel (using Sr22519)
 let xtClaim = (
