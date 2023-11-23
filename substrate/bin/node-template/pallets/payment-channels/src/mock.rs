@@ -22,7 +22,7 @@ use crate as pallet_payment_channels;
 
 use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{AsEnsureOriginWithArg, ConstU32, ConstU64},
+	traits::{ConstU32, ConstU64},
 };
 use sp_core::{H256, Pair};
 use sp_keystore::{testing::MemoryKeystore, KeystoreExt};

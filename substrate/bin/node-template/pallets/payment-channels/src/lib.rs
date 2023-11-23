@@ -36,7 +36,6 @@ pub use pallet::*;
 pub mod pallet {
 	use frame_support::traits::Len;
 	use sp_runtime::Saturating;
-	use sp_runtime::traits::Hash;
 	use super::*;
 
 	type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -82,6 +81,7 @@ pub mod pallet {
 
 	#[derive(Encode, Decode, Clone, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 	pub struct Channel<Hash, AccountId, Balance, BlockNumber> {
+		id: Hash,
 		organization: Hash,
 		service: Hash,
 		owner: AccountId,
@@ -195,6 +195,7 @@ pub mod pallet {
 		ServiceDeleted { id: HashId<T>, owner: T::AccountId, organization: HashId<T> },
 
 		ChannelCreated {
+			id: HashId<T>,
 			organization: HashId<T>,
 			service: HashId<T>,
 			owner: T::AccountId,
@@ -255,13 +256,7 @@ pub mod pallet {
 			T::Currency::reserve(&owner, T::OrganizationDeposit::get())
 				.map_err(|_| Error::<T>::InsufficientFunds)?;
 
-			let hash = (
-				b"modlpy/paych____",
-				owner.clone(),
-				name.clone()
-			).using_encoded(blake2_256);
-
-			let organization_id = T::Hashing::hash(&hash[..]);
+			let organization_id = Self::hash_name(owner.clone(), name.clone());
 
 			ensure!(!Organizations::<T>::contains_key(&owner, &organization_id), Error::<T>::OrganizationExists);
 
@@ -300,13 +295,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let hash = (
-				b"modlpy/paych____",
-				owner.clone(),
-				name.clone()
-			).using_encoded(blake2_256);
-
-			let organization_id = T::Hashing::hash(&hash[..]);
+			let organization_id = Self::hash_name(owner.clone(), name.clone());
 
 			let organization = Organizations::<T>::get(
 				owner.clone(), organization_id.clone()).ok_or(Error::<T>::OrganizationNotFound)?;
@@ -346,13 +335,7 @@ pub mod pallet {
 				T::Currency::reserve(&owner, T::ServiceDeposit::get())
 					.map_err(|_| Error::<T>::InsufficientFunds)?;
 
-				let hash = (
-					b"modlpy/paych____",
-					owner.clone(),
-					name.clone()
-				).using_encoded(blake2_256);
-
-				let service_id = T::Hashing::hash(&hash[..]);
+				let service_id = Self::hash_name(owner.clone(), name.clone());
 
 				ensure!(!Services::<T>::contains_key(&organization_id, &service_id), Error::<T>::ServiceExists);
 
@@ -442,8 +425,6 @@ pub mod pallet {
 
 			let ((org_owner, organization_id), service_id) = service;
 
-			ensure!(Organizations::<T>::contains_key(&org_owner, &organization_id), Error::<T>::OrganizationNotFound);
-
 			let mut service = Services::<T>::get(
 				organization_id.clone(),
 				service_id.clone()
@@ -451,12 +432,17 @@ pub mod pallet {
 
 			ensure!(calls >= service.minimum_calls, Error::<T>::ServiceLowNumberOfCalls);
 
+			let channel_id = Self::hash_channel_id(
+				owner.clone(),
+				organization_id.clone(),
+				service_id.clone()
+			);
+			ensure!(!Channels::<T>::contains_key(&owner, &channel_id), Error::<T>::ChannelExists);
+
 			let price = service.price.clone();
 			let funds = price.saturating_mul(calls.into());
 
 			T::Currency::transfer(&owner, &Self::account_id(), funds.into(), AllowDeath)?;
-
-			ensure!(!Channels::<T>::contains_key(&owner, &service_id), Error::<T>::ChannelExists);
 
 			service.channels += 1;
 
@@ -464,6 +450,7 @@ pub mod pallet {
 			let expiration = bn + service.expiration_threshold.clone();
 
 			let channel = Channel {
+				id: channel_id.clone(),
 				organization: organization_id.clone(),
 				service: service_id.clone(),
 				owner: owner.clone(),
@@ -474,9 +461,10 @@ pub mod pallet {
 			};
 
 			Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
-			Channels::<T>::insert(owner.clone(), service_id.clone(), channel);
+			Channels::<T>::insert(owner.clone(), channel_id.clone(), channel);
 
 			Self::deposit_event(Event::ChannelCreated {
+				id: channel_id,
 				organization: organization_id,
 				service: service_id,
 				owner,
@@ -497,10 +485,10 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let (channel_owner, service_id) = channel;
+			let (channel_owner, channel_id) = channel;
 
 			let mut channel = Channels::<T>::get(
-				channel_owner.clone(), service_id.clone()).ok_or(Error::<T>::ChannelNotFound)?;
+				channel_owner.clone(), channel_id.clone()).ok_or(Error::<T>::ChannelNotFound)?;
 
 			let bn = frame_system::Pallet::<T>::block_number();
 
@@ -519,7 +507,7 @@ pub mod pallet {
 			if owner == channel.owner {
 				if is_expired {
 					T::Currency::transfer(&Self::account_id(), &owner, remaining.into(), AllowDeath)?;
-					Self::deposit_event(Event::ChannelExpiredClaimed { id: service_id.clone(), by: owner.clone(), funds: remaining });
+					Self::deposit_event(Event::ChannelExpiredClaimed { id: channel_id.clone(), by: owner.clone(), funds: remaining });
 					return Ok(());
 				} else if counter == 0 {
 					return Err(Error::<T>::ClaimNotExpired.into());
@@ -533,7 +521,7 @@ pub mod pallet {
 
 			let message = (
 				b"modlpy/paych____",
-				service_id.clone(),
+				channel_id.clone(),
 				counter.clone()
 			).using_encoded(blake2_256);
 
@@ -557,10 +545,10 @@ pub mod pallet {
 
 			channel.counter = counter.clone();
 
-			Channels::<T>::insert(channel_owner.clone(), service_id.clone(), channel);
+			Channels::<T>::insert(channel_owner.clone(), channel_id.clone(), channel);
 			Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
 
-			Self::deposit_event(Event::ChannelClaimed { id: service_id, by: owner, counter, funds: claim });
+			Self::deposit_event(Event::ChannelClaimed { id: channel_id, by: owner, counter, funds: claim });
 			Ok(())
 		}
 	}
@@ -568,6 +556,23 @@ pub mod pallet {
 	impl<T: Config> Pallet<T> {
 		pub fn account_id() -> T::AccountId {
 			T::PalletId::get().into_account_truncating()
+		}
+		pub fn hash_name(owner: T::AccountId, name: NameVec<T>) -> T::Hash {
+			let hash = (
+				b"modlpy/paych____",
+				owner,
+				name,
+			).using_encoded(blake2_256);
+			Decode::decode(&mut &hash[..]).expect("infinite length input; no invalid inputs for type; qed")
+		}
+		pub fn hash_channel_id(owner: T::AccountId, organization_id: T::Hash, service_id: T::Hash) -> T::Hash {
+			let hash = (
+				b"modlpy/paych____",
+				owner,
+				organization_id,
+				service_id,
+			).using_encoded(blake2_256);
+			Decode::decode(&mut &hash[..]).expect("infinite length input; no invalid inputs for type; qed")
 		}
 		pub fn validate_signature(
 			message: &Vec<u8>,
