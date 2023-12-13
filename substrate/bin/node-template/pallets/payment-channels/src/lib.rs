@@ -59,8 +59,8 @@ pub mod pallet {
 	#[derive(Encode, Decode, Clone, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 	pub struct Organization<Hash, AccountId, NameVec, MetadataVec> {
 		id: Hash,
-		services: u32,
 		owner: AccountId,
+		services: u32,
 		name: NameVec,
 		members: u32,
 		metadata: MetadataVec,
@@ -69,9 +69,9 @@ pub mod pallet {
 	#[derive(Encode, Decode, Clone, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 	pub struct Service<Hash, AccountId, NameVec, MetadataVec, Balance, BlockNumber> {
 		id: Hash,
-		channels: u32,
 		owner: AccountId,
 		organization: Hash,
+		channels: u32,
 		name: NameVec,
 		version: u32,
 		metadata: MetadataVec,
@@ -84,10 +84,10 @@ pub mod pallet {
 	#[derive(Encode, Decode, Clone, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 	pub struct Channel<Hash, AccountId, Balance, BlockNumber> {
 		id: Hash,
+		owner: AccountId,
 		organization: Hash,
 		service: Hash,
 		version: u32,
-		owner: AccountId,
 		counter: u32,
 		price: Balance,
 		calls: u32,
@@ -200,20 +200,20 @@ pub mod pallet {
 
 		ChannelCreated {
 			id: HashId<T>,
+			owner: T::AccountId,
 			organization: HashId<T>,
 			service: HashId<T>,
 			version: u32,
-			owner: T::AccountId,
 			calls: u32,
 			funds: BalanceOf<T>,
 			expiration: BlockNumberFor<T>,
 		},
 		ChannelUpdated {
 			id: HashId<T>,
+			owner: T::AccountId,
 			organization: HashId<T>,
 			service: HashId<T>,
 			version: u32,
-			owner: T::AccountId,
 			calls: u32,
 			funds: BalanceOf<T>,
 			expiration: BlockNumberFor<T>,
@@ -290,8 +290,8 @@ pub mod pallet {
 
 			let organization = Organization {
 				id: organization_id.clone(),
-				services: 0,
 				owner: owner.clone(),
+				services: 0,
 				name,
 				metadata,
 				members: members_count.clone(),
@@ -360,8 +360,8 @@ pub mod pallet {
 
 				let service = Service {
 					id: service_id.clone(),
-					channels: 0,
 					owner: owner.clone(),
+					channels: 0,
 					organization: organization_id.clone(),
 					name,
 					version: 1,
@@ -494,10 +494,10 @@ pub mod pallet {
 
 			let channel = Channel {
 				id: channel_id.clone(),
+				owner: owner.clone(),
 				organization: organization_id.clone(),
 				service: service_id.clone(),
 				version: service.version.clone(),
-				owner: owner.clone(),
 				counter: 0,
 				price: price.clone(),
 				calls: calls.clone(),
@@ -509,10 +509,10 @@ pub mod pallet {
 
 			Self::deposit_event(Event::ChannelCreated {
 				id: channel_id,
+				owner,
 				organization: organization_id,
 				service: service_id,
 				version: service.version,
-				owner,
 				funds,
 				calls,
 				expiration
@@ -571,10 +571,10 @@ pub mod pallet {
 
 			Self::deposit_event(Event::ChannelUpdated {
 				id: channel_id,
+				owner,
 				organization: organization_id,
 				service: service_id,
 				version: service.version,
-				owner,
 				funds,
 				calls,
 				expiration
