@@ -24,18 +24,19 @@ use sp_io::hashing::blake2_256;
 
 use frame_support::pallet_prelude::*;
 use frame_support::PalletId;
-use frame_support::traits::{Currency, ReservableCurrency, ExistenceRequirement::AllowDeath};
+use frame_support::traits::{Currency, Len, ReservableCurrency, ExistenceRequirement::AllowDeath};
 use frame_system::pallet_prelude::*;
 use sp_std::prelude::*;
-use sp_runtime::traits::{AccountIdConversion, IdentifyAccount, Verify};
+use sp_runtime::{
+	Saturating,
+	traits::{AccountIdConversion, IdentifyAccount, Verify, Zero}
+};
 
 pub use pallet::*;
 
 // All pallet logic is defined in its own module and must be annotated by the `pallet` attribute.
 #[frame_support::pallet]
 pub mod pallet {
-	use frame_support::traits::Len;
-	use sp_runtime::Saturating;
 	use super::*;
 
 	type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -72,6 +73,7 @@ pub mod pallet {
 		owner: AccountId,
 		organization: Hash,
 		name: NameVec,
+		version: u32,
 		metadata: MetadataVec,
 		price: Balance,
 		minimum_calls: u32,
@@ -84,6 +86,7 @@ pub mod pallet {
 		id: Hash,
 		organization: Hash,
 		service: Hash,
+		version: u32,
 		owner: AccountId,
 		counter: u32,
 		price: Balance,
@@ -193,16 +196,30 @@ pub mod pallet {
 
 		ServiceCreated { id: HashId<T>, owner: T::AccountId, organization: HashId<T>, price: BalanceOf<T> },
 		ServiceDeleted { id: HashId<T>, owner: T::AccountId, organization: HashId<T> },
+		ServiceUpdated { id: HashId<T>, owner: T::AccountId, organization: HashId<T>, version: u32 },
 
 		ChannelCreated {
 			id: HashId<T>,
 			organization: HashId<T>,
 			service: HashId<T>,
+			version: u32,
 			owner: T::AccountId,
+			calls: u32,
+			funds: BalanceOf<T>,
+			expiration: BlockNumberFor<T>,
+		},
+		ChannelUpdated {
+			id: HashId<T>,
+			organization: HashId<T>,
+			service: HashId<T>,
+			version: u32,
+			owner: T::AccountId,
+			calls: u32,
 			funds: BalanceOf<T>,
 			expiration: BlockNumberFor<T>,
 		},
 		ChannelExpiredClaimed { id: ChannelId<T>, by: T::AccountId, funds: BalanceOf<T> },
+		ChannelDeleted { id: ChannelId<T>, by: T::AccountId, funds: BalanceOf<T> },
 		ChannelClaimed {
 			id: ChannelId<T>,
 			by: T::AccountId,
@@ -222,11 +239,11 @@ pub mod pallet {
 		ServiceNotFound,
 		ServiceNotOwner,
 		ServiceNotOrgMember,
-		ServiceLowNumberOfCalls,
 
 		ChannelExists,
 		ChannelNotFound,
 		ChannelNotOwner,
+		ChannelLowNumberOfCalls,
 		ChannelInvalidExpiration,
 
 		ClaimNotAllowed,
@@ -347,6 +364,7 @@ pub mod pallet {
 					owner: owner.clone(),
 					organization: organization_id.clone(),
 					name,
+					version: 1,
 					price: price.clone(),
 					minimum_calls,
 					expiration_threshold,
@@ -402,15 +420,38 @@ pub mod pallet {
 		#[pallet::weight(10_000_000)]
 		pub fn update_service(
 			origin: OriginFor<T>,
-			// service_id: ServiceId,
-			// name: NameVec<T>,
-			// price: BalanceOf<T>,
-			// minimum_calls: u32,
-			// expiration_threshold: u128,
-			// trials: u32,
-			// metadata: MetadataVec<T>,
+			service: ServiceSpecs<T>,
+			name: Option<NameVec<T>>,
+			price: Option<BalanceOf<T>>,
+			minimum_calls: Option<u32>,
+			expiration_threshold: Option<BlockNumberFor<T>>,
+			trials: Option<u32>,
+			metadata: Option<MetadataVec<T>>,
 		) -> DispatchResult {
-			let _owner = ensure_signed(origin)?;
+			let owner = ensure_signed(origin)?;
+
+			let ((_, organization_id), service_id) = service;
+
+			let mut service = Services::<T>::get(
+				organization_id.clone(),
+				service_id.clone()
+			).ok_or(Error::<T>::ServiceNotFound)?;
+
+			ensure!(owner == service.owner, Error::<T>::ServiceNotOwner);
+
+			service.name = name.unwrap_or(service.name);
+			service.price = price.unwrap_or(service.price);
+			service.minimum_calls = minimum_calls.unwrap_or(service.minimum_calls);
+			service.expiration_threshold = expiration_threshold.unwrap_or(service.expiration_threshold);
+			service.trials = trials.unwrap_or(service.trials);
+			service.metadata = metadata.unwrap_or(service.metadata);
+
+			let version = service.version + 1;
+			service.version = version.clone();
+
+			Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
+			Self::deposit_event(Event::ServiceUpdated { id: service_id, owner, organization: organization_id, version });
+
 			Ok(())
 		}
 
@@ -423,19 +464,19 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 
-			let ((org_owner, organization_id), service_id) = service;
+			let ((_, organization_id), service_id) = service;
 
 			let mut service = Services::<T>::get(
 				organization_id.clone(),
 				service_id.clone()
 			).ok_or(Error::<T>::ServiceNotFound)?;
 
-			ensure!(calls >= service.minimum_calls, Error::<T>::ServiceLowNumberOfCalls);
+			ensure!(calls >= service.minimum_calls, Error::<T>::ChannelLowNumberOfCalls);
 
 			let channel_id = Self::hash_channel_id(
 				owner.clone(),
 				organization_id.clone(),
-				service_id.clone()
+				service_id.clone(),
 			);
 			ensure!(!Channels::<T>::contains_key(&owner, &channel_id), Error::<T>::ChannelExists);
 
@@ -446,6 +487,8 @@ pub mod pallet {
 
 			service.channels += 1;
 
+			let calls = calls.clone();
+
 			let bn = frame_system::Pallet::<T>::block_number();
 			let expiration = bn + service.expiration_threshold.clone();
 
@@ -453,6 +496,7 @@ pub mod pallet {
 				id: channel_id.clone(),
 				organization: organization_id.clone(),
 				service: service_id.clone(),
+				version: service.version.clone(),
 				owner: owner.clone(),
 				counter: 0,
 				price: price.clone(),
@@ -460,15 +504,17 @@ pub mod pallet {
 				expiration: expiration.clone(),
 			};
 
-			Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
+			Services::<T>::insert(organization_id.clone(), service_id.clone(), service.clone());
 			Channels::<T>::insert(owner.clone(), channel_id.clone(), channel);
 
 			Self::deposit_event(Event::ChannelCreated {
 				id: channel_id,
 				organization: organization_id,
 				service: service_id,
+				version: service.version,
 				owner,
 				funds,
+				calls,
 				expiration
 			});
 
@@ -476,6 +522,68 @@ pub mod pallet {
 		}
 
 		#[pallet::call_index(6)]
+		#[pallet::weight(10_000_000)]
+		pub fn update_channel(
+			origin: OriginFor<T>,
+			channel: ChannelSpecs<T>,
+			calls: Option<u32>,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
+
+			let (channel_owner, channel_id) = channel;
+
+			ensure!(owner == channel_owner, Error::<T>::ChannelNotOwner);
+
+			let mut channel = Channels::<T>::get(
+				channel_owner.clone(), channel_id.clone()).ok_or(Error::<T>::ChannelNotFound)?;
+
+			let (organization_id, service_id) = (channel.organization.clone(), channel.service.clone());
+
+			let service = Services::<T>::get(
+				organization_id.clone(), service_id.clone()).ok_or(Error::<T>::ServiceNotFound)?;
+
+			// Returning funds to the Channel's owner
+			let price = channel.price.clone();
+			let mut remaining = BalanceOf::<T>::default();
+			if channel.counter <= channel.calls {
+				remaining = price.saturating_mul((channel.calls.clone() - channel.counter.clone()).into());
+			}
+			if !remaining.is_zero() {
+				T::Currency::transfer(&Self::account_id(), &owner, remaining.into(), AllowDeath)?;
+			}
+
+			let calls = calls.unwrap_or(service.minimum_calls);
+			ensure!(calls >= service.minimum_calls, Error::<T>::ChannelLowNumberOfCalls);
+
+			let price = service.price.clone();
+
+			let bn = frame_system::Pallet::<T>::block_number();
+			let expiration = bn + service.expiration_threshold.clone();
+
+			channel.version = service.version.clone();
+			channel.price = price.clone();
+			channel.calls = calls.clone();
+			channel.expiration = expiration.clone();
+
+			// Funding the Channel
+			let funds = price.saturating_mul(calls.into());
+			T::Currency::transfer(&owner, &Self::account_id(), funds.into(), AllowDeath)?;
+
+			Self::deposit_event(Event::ChannelUpdated {
+				id: channel_id,
+				organization: organization_id,
+				service: service_id,
+				version: service.version,
+				owner,
+				funds,
+				calls,
+				expiration
+			});
+
+			Ok(())
+		}
+
+		#[pallet::call_index(7)]
 		#[pallet::weight(10_000_000)]
 		pub fn claim_channel_funds(
 			origin: OriginFor<T>,
@@ -490,9 +598,15 @@ pub mod pallet {
 			let mut channel = Channels::<T>::get(
 				channel_owner.clone(), channel_id.clone()).ok_or(Error::<T>::ChannelNotFound)?;
 
+			let (organization_id, service_id) = (channel.organization.clone(), channel.service.clone());
+
+			let mut service = Services::<T>::get(
+				organization_id.clone(), service_id.clone()).ok_or(Error::<T>::ServiceNotFound)?;
+
 			let bn = frame_system::Pallet::<T>::block_number();
 
 			let is_expired = channel.expiration <= bn;
+			let version_changed = channel.version != service.version;
 
 			let counter = counter.unwrap_or_default();
 
@@ -503,10 +617,22 @@ pub mod pallet {
 				remaining = price.saturating_mul((channel.calls.clone() - channel.counter.clone()).into());
 			}
 
-			// By channel owner, channel must be expired.
+			// There is no more funds to be claimed, delete the Channel and update the Service.
+			if remaining.is_zero() {
+				service.channels -= 1;
+				Channels::<T>::remove(channel_owner.clone(), channel_id.clone());
+				Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
+				Self::deposit_event(Event::ChannelDeleted { id: channel_id.clone(), by: owner.clone(), funds: remaining });
+				return Ok(());
+			}
+
+			// By channel owner, channel must be expired or service has changed version.
 			if owner == channel.owner {
-				if is_expired {
+				if is_expired || version_changed {
 					T::Currency::transfer(&Self::account_id(), &owner, remaining.into(), AllowDeath)?;
+					service.channels -= 1;
+					Channels::<T>::remove(channel_owner.clone(), channel_id.clone());
+					Services::<T>::insert(organization_id.clone(), service_id.clone(), service);
 					Self::deposit_event(Event::ChannelExpiredClaimed { id: channel_id.clone(), by: owner.clone(), funds: remaining });
 					return Ok(());
 				} else if counter == 0 {
@@ -522,15 +648,11 @@ pub mod pallet {
 			let message = (
 				b"modlpy/paych____",
 				channel_id.clone(),
+				service.version.clone(),
 				counter.clone()
 			).using_encoded(blake2_256);
 
 			Self::validate_signature(&Encode::encode(&message), &signature, &signer)?;
-
-			let (organization_id, service_id) = (channel.organization.clone(), channel.service.clone());
-
-			let service = Services::<T>::get(
-				organization_id.clone(), service_id.clone()).ok_or(Error::<T>::ServiceNotFound)?;
 
 			let mut claim = price.saturating_mul((counter.clone() - channel.counter.clone()).into());
 

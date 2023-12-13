@@ -5,10 +5,11 @@ use sp_runtime::MultiSignature;
 use sp_io::hashing::blake2_256;
 use crate::{mock::*, HashId, Config, NameVec, ChannelSpecs};
 
-fn sign_message<T: Config>(pair: sp_core::sr25519::Pair, channel_id: HashId<T>, counter: u32) -> (Vec<u8>, MultiSignature) {
+fn sign_message<T: Config>(pair: sp_core::sr25519::Pair, channel_id: HashId<T>, version: u32, counter: u32) -> (Vec<u8>, MultiSignature) {
     let message = (
         b"modlpy/paych____",
         channel_id,
+        version,
         counter,
     ).using_encoded(blake2_256);
     let encoded_data = Encode::encode(&message);
@@ -57,11 +58,13 @@ fn workflow() {
 
         let channel_id = PaymentChannels::hash_channel_id(bob.clone(), organization_id, service_id);
         let channel: ChannelSpecs<Test> = (bob.clone(), channel_id);
+        let version = 1u32;
         let counter = 100u32;
 
         let (message, signature) = sign_message::<Test>(
             pair_bob.clone(),
             channel_id.clone(),
+            version,
             counter.clone(),
         );
 

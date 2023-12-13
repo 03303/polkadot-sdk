@@ -103,15 +103,16 @@ queryChnStorage.forEach(([{ args: [owner, id] }, channel]) => {
 // 0x62dc66ce7e27dc266463abdd560250c6542b66c197722e840e797f968da9f86c7aef31f32a53f019229fe5c4d6620fc444ef741c8b00a1cbd097161b1e95a28d
 // 0x5a5c1c6ed37fb69e72d76d72dc3965fca6205b48f5cc3aa6419fbec52d672239b5e1ff52b984d8f2efc2f6c6c6141c232d0097c167903aaa3fe1472880d9e484
 
-const signChannelCounter = (signer, channelId, counter, asHex = true) => {
+const signChannelCounter = (signer, channelId, version, counter, asHex = true) => {
     const constantBytes = new TextEncoder().encode('modlpy/paych____');
     const c = api.registry.createType('u32', counter).toU8a();
-    const sig = signer.sign(blake2AsU8a([...constantBytes, ...channelId, ...c]));
+    const v = api.registry.createType('u32', version).toU8a();
+    const sig = signer.sign(blake2AsU8a([...constantBytes, ...channelId, ...v, ...c]));
     if (asHex) return `0x${Buffer.from(sig).toString('hex')}`;
     return sig;
 }
 
-const bobSig = signChannelCounter(bob, bobChannelId, 77, false);
+const bobSig = signChannelCounter(bob, bobChannelId, 1, 77, false);
 
 // Alice claims 77 (of 100) from Bob's channel (using Sr22519)
 let xtClaim = (
